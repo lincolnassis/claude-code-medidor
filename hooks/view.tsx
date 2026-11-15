@@ -247,7 +247,7 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
       width: 22,
       node: (
         <Text size={small} dimColor tabular>
-          ⏱ trabalhando há {fmtDur(v.now - v.turnStartedAt)}
+          ⏱ {fmtDur(v.now - v.turnStartedAt)}
         </Text>
       ),
     })
@@ -265,14 +265,14 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
           : ''
         : wk.proj >= 100 && wk.hitAt
           ? `⚠ acaba ${fmtClock(wk.hitAt, v.now)}`
-          : `→ ${Math.round(wk.proj)}% no fim`
+          : `→ ${Math.round(wk.proj)}%`
     const title =
       `Semana: ${wk.pct}% usado` +
       (wk.resetsAt ? ` · zera ${fmtClock(wk.resetsAt, v.now)} (em ${fmtIn(wk.resetsAt - v.now)})` : '') +
       (wk.proj !== null ? ` · no ritmo atual: ${Math.round(wk.proj)}% ao zerar` : '')
     segs.push({
       key: 'week',
-      width: 22 + projText.length,
+      width: 19 + projText.length,
       node: (
         <Box flexDirection="row" alignItems="center" gap="xs">
           <Text size={small} dimColor>Semana</Text>
@@ -291,7 +291,7 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
     const reset = fh.isReset ? 'zerou' : fh.resetsAt ? `↻ ${fmtClock(fh.resetsAt, v.now)}` : ''
     segs.push({
       key: '5h',
-      width: 18 + reset.length,
+      width: 15 + reset.length,
       node: (
         <Box flexDirection="row" alignItems="center" gap="xs">
           <Text size={small} dimColor>5h</Text>
@@ -330,8 +330,10 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
     const m = v.ledger
     const used = limitPct(v, m.month.usd)
     const proj = limitPct(v, m.monthProjUsd)
-    const main = used === null ? `${fmtTok(m.month.tokens)} tokens` : fmtWeeks(used)
-    const tail = proj === null ? '' : `→ ${fmtWeeks(proj)} de limite`
+    // Compact: "1,6 sem → 3,4" (weeks' worth of the weekly limit).
+    const weeksShort = (p: number) => (p < 100 ? fmtPct(p) : `${comma((p / 100).toFixed(1))} sem`)
+    const main = used === null ? `${fmtTok(m.month.tokens)} tok` : weeksShort(used)
+    const tail = proj === null ? '' : `→ ${weeksShort(proj)}`
     segs.push({
       key: 'month',
       width: 8 + main.length + tail.length,
@@ -362,7 +364,9 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
   if (segs.length === 0) return null
 
   // Keep what fits, in priority order, then draw in reading order.
-  const budget = Math.max(20, cols - 12)
+  // The desktop draws the band in a small proportional face: an estimated
+  // cell takes about 0.85 of a real one there.
+  const budget = Math.max(20, (cols - 12) / (interactive ? 0.85 : 1))
   const keep = new Set<string>()
   let used = 0
   for (const key of ['task', 'week', '5h', 'run', 'month', 'ctx']) {

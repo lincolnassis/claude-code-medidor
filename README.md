@@ -3,7 +3,7 @@
 Um mod para o [Claude Code](https://claude.com/claude-code) que coloca, logo acima do campo do prompt, uma linha com tudo o que importa para não estourar o plano:
 
 ```
-◆ Tarefa 2/4 ▰▰▱▱ 50% · ~4 min restantes · total ~9 min │ Semana ▰▰▱ 40% → 81% no fim │ 5h ▰▱▱ 23% ↻ 18:00 │ Mês 1,6 semanas → 3,4 semanas de limite │ Contexto 34%
+◆ Tarefa 2/4 ▰▰▱▱ 50% · ~4 min restantes · total ~9 min │ Semana ▰▰▱ 40% → 81% │ 5h ▰▱▱ 23% ↻ 18:00 │ Mês 1,6 sem → 3,4 │ Contexto 34%
 ```
 
 Feito para quem usa o plano Pro (ou Max) e precisa acompanhar de perto o limite semanal e a janela de 5 horas.
