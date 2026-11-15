@@ -1,12 +1,14 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { DayRow, Ledger, ModelRow, ProjectRow, Totals } from '../types'
+import type { DayRow, Ledger, ModelRow, PrevWeek, ProjectRow, Totals } from '../types'
 
 /**
  * The usage ledger: every Claude Code session on this computer (desktop app,
  * VS Code, terminal) writes its transcript to ~/.claude/projects/**.jsonl,
  * and each assistant row there carries the request's token counts and model.
- * This file sums them by day, model and project. Nothing here calls a model.
+ * This file sums them by day, model and project, and optionally shares a
+ * numbers-only summary with your other computers through a synced folder
+ * (OneDrive). Nothing here calls a model.
  */
 
 type $T = EngineInterface
@@ -14,19 +16,25 @@ type $T = EngineInterface
 /** in, out, cache read, cache write 5m, cache write 1h, requests */
 type Tok = [number, number, number, number, number, number]
 
+type Days = Record<string, Record<string, Tok>>
+
 type FileEntry = {
   size: number
   mtime: number
   project: string
-  days: Record<string, Record<string, Tok>>
+  days: Days
   skipped?: boolean
 }
 
 type Cache = { v: 1; files: Record<string, FileEntry> }
 
+/** What one computer shares: per day, per model, token counts. No names, no text. */
+type MachineFile = { v: 1; machine: string; at: number; days: Days }
+
 const DAY = 86_400_000
 const KEEP_DAYS = 62
 const CACHE_KEY = 'ledger-cache-v1'
+const SYNC_FOLDER = 'ClaudeMedidor'
 
 // API list prices per million tokens: input, output, cache read.
 // Cache writes cost 1.25x input (5 min) or 2x input (1 h).
@@ -60,6 +68,13 @@ export function dayKey(ms: number): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${m}-${day}`
+}
+
+/** Midnight of the Monday of the week holding `ms`, local time. */
+export function mondayOf(ms: number): number {
+  const d = new Date(ms)
+  const back = (d.getDay() + 6) % 7
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - back).getTime()
 }
 
 /** A friendly name for a model id: claude-opus-5-5 → Opus 5.5. */
@@ -115,7 +130,7 @@ function parseFile(text: string): Pick<FileEntry, 'project' | 'days'> {
     if (!Number.isFinite(ts)) continue
     byId.set(msg.id ?? row.uuid ?? String(byId.size), { ts, model: msg.model, usage: msg.usage })
   }
-  const days: FileEntry['days'] = {}
+  const days: Days = {}
   for (const { ts, model, usage: u } of byId.values()) {
     const key = dayKey(ts)
     const perModel = (days[key] ??= {})
@@ -139,6 +154,19 @@ async function configDir($: $T): Promise<string> {
   return `${home}/.claude`
 }
 
+/** The synced folder: CLAUDE_MEDIDOR_SYNC_DIR, else the personal OneDrive. */
+export async function syncDir($: $T): Promise<string | null> {
+  const custom = await $.env.get('CLAUDE_MEDIDOR_SYNC_DIR')
+  if (custom) return custom
+  const oneDrive = (await $.env.get('OneDriveConsumer')) ?? (await $.env.get('OneDrive'))
+  return oneDrive ? `${oneDrive}/${SYNC_FOLDER}` : null
+}
+
+async function machineName($: $T): Promise<string> {
+  const name = (await $.env.get('COMPUTERNAME')) ?? (await $.env.get('HOSTNAME')) ?? 'este-computador'
+  return name.replace(/[^A-Za-z0-9._-]/g, '_')
+}
+
 async function walk($: $T, dir: string, depth: number, out: Array<{ path: string; size: number; mtime: number }>) {
   let entries
   try {
@@ -156,8 +184,52 @@ async function walk($: $T, dir: string, depth: number, out: Array<{ path: string
   }
 }
 
+function mergeDays(into: Days, from: Days) {
+  for (const [date, perModel] of Object.entries(from)) {
+    const target = (into[date] ??= {})
+    for (const [model, t] of Object.entries(perModel)) {
+      const sum = (target[model] ??= [0, 0, 0, 0, 0, 0])
+      for (let n = 0; n < 6; n += 1) sum[n] = (sum[n] ?? 0) + (t[n] ?? 0)
+    }
+  }
+}
+
+/**
+ * Shares this computer's days and reads the others'. Only token counts per
+ * day and model travel, with the computer's name; no project, path or text.
+ */
+async function syncMachines($: $T, local: Days, now: number): Promise<Array<{ name: string; days: Days }>> {
+  const dir = await syncDir($)
+  if (!dir) return []
+  const own = await machineName($)
+  const mine: MachineFile = { v: 1, machine: own, at: now, days: local }
+  const text = JSON.stringify(mine.days)
+  if ((await $.store.get('sync-last')) !== text) {
+    await $.fs.write(`${dir}/${own}.json`, JSON.stringify(mine))
+    await $.store.set('sync-last', text)
+  }
+  const others: Array<{ name: string; days: Days }> = []
+  let entries
+  try {
+    entries = await $.fs.list(dir)
+  } catch {
+    return others
+  }
+  for (const entry of entries) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json') || entry.name === `${own}.json`) continue
+    if (entry.mtimeMs < now - KEEP_DAYS * DAY) continue
+    try {
+      const other = JSON.parse((await $.fs.read(`${dir}/${entry.name}`)) as string) as MachineFile
+      if (other.v === 1 && other.days) others.push({ name: other.machine, days: other.days })
+    } catch {
+      // A file mid-sync or not ours: skipped until the next scan.
+    }
+  }
+  return others
+}
+
 /** Rescans the transcripts (only files that changed) and sums the ledger. */
-export async function scanLedger($: $T, weekStart: number | null): Promise<Ledger> {
+export async function scanLedger($: $T, weekStart: number | null, isSyncOn: boolean): Promise<Ledger> {
   const now = await $.clock.now()
   const root = `${await configDir($)}/projects`
   const found: Array<{ path: string; size: number; mtime: number }> = []
@@ -187,7 +259,23 @@ export async function scanLedger($: $T, weekStart: number | null): Promise<Ledge
   if (changed || Object.keys(old).length !== Object.keys(files).length) {
     await $.store.set(CACHE_KEY, { v: 1, files } satisfies Cache)
   }
-  return summarize(files, now, weekStart)
+
+  let others: Array<{ name: string; days: Days }> = []
+  if (isSyncOn) {
+    const local: Days = {}
+    for (const f of Object.values(files)) mergeDays(local, f.days)
+    try {
+      others = await syncMachines($, local, now)
+    } catch (err) {
+      $.ui.log(`medidor: sincronização indisponível (${String(err)})`, { to: 'debug' })
+    }
+  }
+
+  const entries: FileEntry[] = [
+    ...Object.values(files),
+    ...others.map(o => ({ size: 0, mtime: 0, project: `Outro computador (${o.name})`, days: o.days })),
+  ]
+  return summarize(entries, now, weekStart, others.map(o => o.name))
 }
 
 function zero(): Totals {
@@ -201,11 +289,18 @@ function add(into: Totals, model: string, t: Tok) {
   into.requests += t[5]
 }
 
+function bump(map: Map<string, ModelRow>, name: string, usd: number, tokens: number) {
+  const row = map.get(name) ?? { model: name, usd: 0, tokens: 0 }
+  row.usd += usd
+  row.tokens += tokens
+  map.set(name, row)
+}
+
 function rows<T extends { usd: number }>(map: Map<string, T>): T[] {
   return [...map.values()].sort((a, b) => b.usd - a.usd)
 }
 
-function summarize(files: Cache['files'], now: number, weekStart: number | null): Ledger {
+function summarize(files: FileEntry[], now: number, weekStart: number | null, machines: string[]): Ledger {
   const today = dayKey(now)
   const nowDate = new Date(now)
   const monthPrefix = today.slice(0, 7)
@@ -213,41 +308,44 @@ function summarize(files: Cache['files'], now: number, weekStart: number | null)
   const monthStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1).getTime()
   const daysInMonth = new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0).getDate()
   const firstChartDay = dayKey(now - 29 * DAY)
+  const thisMonday = mondayOf(now)
+  const prevFrom = dayKey(mondayOf(thisMonday - DAY))
+  const prevTo = dayKey(thisMonday - DAY)
 
-  const t = { today: zero(), week: zero(), month: zero() }
+  const t = { today: zero(), week: zero(), month: zero(), prev: zero() }
   const weekModels = new Map<string, ModelRow>()
   const monthModels = new Map<string, ModelRow>()
+  const prevModels = new Map<string, ModelRow>()
+  const prevDays = new Map<string, number>()
   const projects = new Map<string, ProjectRow>()
   const dayUsd = new Map<string, number>()
   let sonnetSaving = 0
   let skipped = 0
 
-  for (const file of Object.values(files)) {
+  for (const file of files) {
     if (file.skipped) skipped += 1
     for (const [date, perModel] of Object.entries(file.days)) {
       for (const [model, tok] of Object.entries(perModel)) {
         const usd = costOf(model, tok)
         const tokens = tok[0] + tok[1] + tok[2] + tok[3] + tok[4]
+        const name = modelName(model)
         if (date >= firstChartDay) dayUsd.set(date, (dayUsd.get(date) ?? 0) + usd)
         if (date === today) add(t.today, model, tok)
         if (date >= weekFrom) {
           add(t.week, model, tok)
-          const name = modelName(model)
-          const row = weekModels.get(name) ?? { model: name, usd: 0, tokens: 0 }
-          row.usd += usd
-          row.tokens += tokens
-          weekModels.set(name, row)
+          bump(weekModels, name, usd, tokens)
           if (/opus|fable|mythos/.test(model)) {
             sonnetSaving += Math.max(0, usd - costOf('claude-sonnet-5-5', tok))
           }
         }
+        if (date >= prevFrom && date <= prevTo) {
+          add(t.prev, model, tok)
+          bump(prevModels, name, usd, tokens)
+          prevDays.set(date, (prevDays.get(date) ?? 0) + usd)
+        }
         if (date.startsWith(monthPrefix)) {
           add(t.month, model, tok)
-          const name = modelName(model)
-          const row = monthModels.get(name) ?? { model: name, usd: 0, tokens: 0 }
-          row.usd += usd
-          row.tokens += tokens
-          monthModels.set(name, row)
+          bump(monthModels, name, usd, tokens)
           const p = projects.get(file.project) ?? { name: file.project, usd: 0, tokens: 0 }
           p.usd += usd
           p.tokens += tokens
@@ -262,6 +360,9 @@ function summarize(files: Cache['files'], now: number, weekStart: number | null)
     const date = dayKey(now - i * DAY)
     days.push({ date, usd: dayUsd.get(date) ?? 0 })
   }
+  let topDay: DayRow | null = null
+  for (const [date, usd] of prevDays) if (!topDay || usd > topDay.usd) topDay = { date, usd }
+  const prevWeek: PrevWeek = { from: prevFrom, to: prevTo, totals: t.prev, byModel: rows(prevModels), topDay }
   const elapsedDays = Math.max(1, (now - monthStart) / DAY)
 
   return {
@@ -275,7 +376,9 @@ function summarize(files: Cache['files'], now: number, weekStart: number | null)
     monthByProject: rows(projects).slice(0, 6),
     days,
     sonnetSavingWeek: sonnetSaving,
-    files: Object.keys(files).length,
+    files: files.length - machines.length,
     skipped,
+    prevWeek,
+    machines,
   }
 }

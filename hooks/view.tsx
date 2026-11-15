@@ -1,6 +1,6 @@
 import type { ElementTable } from 'claude-code'
 
-import type { Ledger, Limits, Task, Win } from '../types'
+import type { Ledger, Limits, Prefs, Running, Task, Win } from '../types'
 import { estimate, type Estimate } from './task'
 
 /** Formatting, projections and the drawings: the band, the pane, VS Code's line. */
@@ -17,7 +17,11 @@ export type View = {
   context: number | null
   turnStartedAt: number | null
   stepAvgMs: number | null
+  running: Running[]
+  prefs: Prefs
 }
+
+export const DEFAULT_PREFS: Prefs = { sound: true, nudge: true, sync: true }
 
 export type UI = {
   Box: ElementTable<'desktop'>['Box']
@@ -284,6 +288,28 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
     })
   }
 
+  // What is running right now: tools and subagents.
+  if (isWorking && v.running.length > 0) {
+    const first = [...v.running].sort((a, b) => a.startedAt - b.startedAt)[0]
+    if (first) {
+      const agents = v.running.filter(r => r.isAgent).length
+      const more = v.running.length - 1
+      const label = `${first.tool}${first.label ? `: ${first.label}` : ''}`
+      const tail = `${fmtDur(v.now - first.startedAt)}${more > 0 ? ` · +${more}` : ''}${agents > 0 ? ` · ${agents} agente${agents > 1 ? 's' : ''}` : ''}`
+      segs.push({
+        key: 'run',
+        width: Math.min(34, label.length) + tail.length + 4,
+        node: (
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            <Text size={small} color="suggestion">⚙</Text>
+            <Text size={small} wrap="truncate-end">{label.length > 34 ? `${label.slice(0, 33)}…` : label}</Text>
+            <Text size={small} dimColor tabular>{tail}</Text>
+          </Box>
+        ),
+      })
+    }
+  }
+
   // The month, in API-equivalent dollars.
   if (v.ledger) {
     const m = v.ledger
@@ -320,7 +346,7 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
   const budget = Math.max(20, cols - 12)
   const keep = new Set<string>()
   let used = 0
-  for (const key of ['task', 'week', '5h', 'month', 'ctx']) {
+  for (const key of ['task', 'week', '5h', 'run', 'month', 'ctx']) {
     const s = segs.find(x => x.key === key)
     if (s && used + s.width <= budget) {
       keep.add(key)
@@ -400,14 +426,43 @@ function table(head: string[], rows: string[][]): string {
   return [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n')
 }
 
-export function drawPane(
-  u: UI,
-  v: View,
-  interactive: boolean,
-  onRefresh: () => void,
-  onToggle: () => void,
-  isHidden: boolean,
-) {
+const SHORT_DAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+
+function dm(date: string): string {
+  const [, mm, dd] = date.split('-')
+  return `${dd}/${mm}`
+}
+
+function weekdayOf(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  return SHORT_DAYS[new Date(y ?? 0, (m ?? 1) - 1, d ?? 1).getDay()] ?? date
+}
+
+/** The Monday note: last week in one paragraph, or null when there was no use. */
+export function weeklySummary(L: Ledger, peakPct: number | null): string | null {
+  const p = L.prevWeek
+  if (p.totals.requests === 0) return null
+  const share = p.byModel
+    .slice(0, 3)
+    .map(r => `${r.model} ${Math.round((r.usd / Math.max(0.0001, p.totals.usd)) * 100)}%`)
+    .join(', ')
+  const parts = [
+    `📊 Resumo da semana passada (${dm(p.from)} a ${dm(p.to)}): ${fmtUsd(p.totals.usd)} em custo equivalente`,
+    `${p.totals.requests} respostas, ${fmtTok(p.totals.tokens)} tokens`,
+    share ? `modelos: ${share}` : '',
+    p.topDay ? `dia mais pesado: ${weekdayOf(p.topDay.date)} (${fmtUsd(p.topDay.usd)})` : '',
+    peakPct !== null ? `pico do limite semanal: ${Math.round(peakPct)}%` : '',
+  ].filter(Boolean)
+  return `${parts.join(' · ')}.`
+}
+
+export type PaneActions = {
+  refresh: () => void
+  toggleHidden: () => void
+  togglePref: (key: keyof Prefs) => void
+}
+
+export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions, isHidden: boolean, peakPct: number | null) {
   const { Box, Text, Button, Markdown, Svg } = u
   const wk = weekly(v)
   const fh = fiveHour(v)
@@ -448,6 +503,18 @@ export function drawPane(
       <Text size="heading" weight="bold">Limites do plano</Text>
       {limitRow('Semana', wk, 'semana')}
       {limitRow('Janela de 5 h', fh, '5h')}
+
+      {v.running.length > 0 && (
+        <Box flexDirection="column" gap="xs">
+          <Text size="heading" weight="bold">Agora</Text>
+          <Markdown
+            text={[...v.running]
+              .sort((a, b) => a.startedAt - b.startedAt)
+              .map(r => `${r.isAgent ? '🤖' : '⚙'} **${r.tool}**${r.label ? ` · ${r.label.replace(/[|*_`]/g, ' ')}` : ''} · ${fmtDur(v.now - r.startedAt)}`)
+              .join('  \n')}
+          />
+        </Box>
+      )}
 
       {est && v.task && (
         <Box flexDirection="column" gap="xs">
@@ -514,10 +581,17 @@ export function drawPane(
               Use o Sonnet para tarefas simples e guarde o Opus para as difíceis.
             </Text>
           )}
+          {weeklySummary(L, peakPct) !== null && (
+            <Box flexDirection="column" gap="xs">
+              <Text weight="semibold">Semana passada</Text>
+              <Text dimColor>{(weeklySummary(L, peakPct) ?? '').replace(/^📊 Resumo da semana passada /, '')}</Text>
+            </Box>
+          )}
           <Text dimColor size="footnote">
             No plano Pro você não paga por token: o valor em US$ é quanto custaria pela API e serve para comparar o peso de cada
             modelo. Lido dos registros deste computador ({L.files} conversas
-            {L.skipped > 0 ? `, ${L.skipped} grandes demais para ler` : ''}); atualizado {fmtClock(L.at, v.now)}.
+            {L.skipped > 0 ? `, ${L.skipped} grandes demais para ler` : ''})
+            {L.machines.length > 0 ? ` e de ${L.machines.join(', ')} pelo OneDrive` : ''}; atualizado {fmtClock(L.at, v.now)}.
           </Text>
         </Box>
       ) : (
@@ -530,9 +604,21 @@ export function drawPane(
         </Text>
       )}
 
-      <Box flexDirection="row" gap="sm">
-        <Button key="medidor-atualizar" label="Atualizar" onPress={onRefresh} />
-        <Button key="medidor-barra" label={isHidden ? 'Mostrar a barra' : 'Ocultar a barra'} onPress={onToggle} />
+      <Box flexDirection="row" gap="sm" flexWrap="wrap">
+        <Button key="medidor-atualizar" label="Atualizar" onPress={act.refresh} />
+        <Button key="medidor-barra" label={isHidden ? 'Mostrar a barra' : 'Ocultar a barra'} onPress={act.toggleHidden} />
+      </Box>
+      <Text weight="semibold">Opções</Text>
+      <Box flexDirection="column" gap="xs">
+        <Button key="medidor-som" plain onPress={() => act.togglePref('sound')}>
+          {v.prefs.sound ? '☑' : '☐'} Som e notificação quando uma tarefa longa termina
+        </Button>
+        <Button key="medidor-aviso" plain onPress={() => act.togglePref('nudge')}>
+          {v.prefs.nudge ? '☑' : '☐'} Sugerir o Sonnet em pedidos simples quando o limite apertar
+        </Button>
+        <Button key="medidor-sync" plain onPress={() => act.togglePref('sync')}>
+          {v.prefs.sync ? '☑' : '☐'} Somar outros computadores pelo OneDrive (só números por dia e modelo)
+        </Button>
       </Box>
     </Box>
   )

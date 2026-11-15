@@ -97,8 +97,16 @@ test('the desktop plan is followed step by step', async ($, on) => {
 
 const TOTALS = { usd: 12.5, tokens: 4_200_000, out: 90_000, requests: 140 }
 const LEDGER = {
-  shape: 'ledger-1',
+  shape: 'ledger-2',
   value: {
+    prevWeek: {
+      from: '2026-11-02',
+      to: '2026-11-08',
+      totals: TOTALS,
+      byModel: [{ model: 'Opus 5.5', usd: 10, tokens: 3_000_000 }],
+      topDay: { date: '2026-11-04', usd: 6 },
+    },
+    machines: ['NOTEBOOK'],
     at: NOW,
     today: TOTALS,
     week: TOTALS,
@@ -123,6 +131,7 @@ test('the /gastos pane and the VS Code line draw on every surface', async ($, on
     return { value: value === undefined ? { value: undefined, version: 0 } : { value, version: 1 } }
   })
   on('clock.now', () => ({ value: NOW }))
+  on('store.get', () => ({ value: undefined }))
   // Beneath the plugin, standing for the engine: draws the line it is handed.
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -140,6 +149,8 @@ test('the /gastos pane and the VS Code line draw on every surface', async ($, on
     })
     expect(await ui.find({ type: 'Text', text: /Limites do plano/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Sonnet 5.5/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /quarta/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /NOTEBOOK pelo OneDrive/ })).toBeDefined()
     await ui.unmount()
   }
 
@@ -151,6 +162,81 @@ test('the /gastos pane and the VS Code line draw on every surface', async ($, on
   })
   expect((await line.find({ type: 'Text', text: /Semana/ }))?.text).toContain('Semana 40%→140%')
   await line.unmount()
+})
+
+test('a running tool shows on the band while it runs, and leaves after', async ($, on) => {
+  let release: () => void = () => {}
+  let reached: () => void = () => {}
+  const isReached = new Promise<void>(r => (reached = r))
+  on('tool.call', () => {
+    reached()
+    return new Promise(done => (release = () => done({ result: {} })))
+  })
+  on('clock.now', () => ({ value: NOW }))
+  const call = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Roda os testes' })
+  await isReached
+  let ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const gear = await ui.find({ type: 'Text', text: /⚙|Bash|trabalhando/ })
+  expect(gear?.text ?? JSON.stringify(ui)).toContain('⚙')
+  expect((await ui.find({ type: 'Text', text: /Bash/ }))?.text).toContain('Bash: Roda os testes')
+  await ui.unmount()
+  release()
+  await call
+  ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Bash/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a long turn ends with a chime, a notification and a toast', async ($, on) => {
+  const played: string[] = []
+  const notified: string[] = []
+  const toasts: string[] = []
+  let clock = NOW
+  on('clock.now', () => ({ value: (clock += 60_000) }))
+  on('clock.every', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
+  on('audio.play', (_, e) => {
+    played.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('ui.notify', (_, e) => {
+    notified.push(JSON.stringify(e))
+    return { value: { isSent: true, channel: 'test' } } as never
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.turn.start({ turnId: 't1' } as never)
+  clock += 5 * 60_000
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, text: '' } as never)
+  expect(played.join()).toContain('assets/pronto.wav')
+  expect(notified.join()).toContain('terminou')
+  expect(toasts.join()).toContain('terminou')
+})
+
+test('a simple prompt on Opus with a tight week suggests Sonnet, a heavy one does not', async ($, on) => {
+  const toasts: string[] = []
+  on('state.get', (_, e) => {
+    const value = e.key === 'lastModel' ? 'claude-opus-5-5' : SEED[e.key]
+    return { value: value === undefined ? { value: undefined, version: 0 } : { value, version: 1 } }
+  })
+  on('clock.now', () => ({ value: NOW }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('ui.toast', (_, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('prompt.submit', () => ({ text: '' }) as never)
+
+  await $.prompt.submit({ text: 'Refatora o código do dashboard em Python' } as never)
+  expect(toasts.length).toBe(0)
+  await $.prompt.submit({ text: 'qual a capital da Austrália?' } as never)
+  expect(toasts.join()).toContain('/model sonnet')
 })
 
 test('TodoWrite, as in the terminal and VS Code, drives the same band', async ($, on) => {

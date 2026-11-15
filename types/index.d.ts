@@ -24,7 +24,10 @@ export type ProjectRow = { name: string; usd: number; tokens: number }
 
 export type DayRow = { date: string; usd: number }
 
-/** Usage summed from the local transcripts (~/.claude/projects). */
+/** The calendar week before this one (Monday to Sunday). */
+export type PrevWeek = { from: string; to: string; totals: Totals; byModel: ModelRow[]; topDay: DayRow | null }
+
+/** Usage summed from the local transcripts (~/.claude/projects), plus synced computers. */
 export type Ledger = {
   at: number
   today: Totals
@@ -38,7 +41,15 @@ export type Ledger = {
   sonnetSavingWeek: number
   files: number
   skipped: number
+  prevWeek: PrevWeek
+  machines: string[]
 }
+
+/** A tool call or subagent running right now. */
+export type Running = { id: string; tool: string; label: string; startedAt: number; isAgent: boolean }
+
+/** What the person turned on or off in the /gastos pane. */
+export type Prefs = { sound: boolean; nudge: boolean; sync: boolean }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -46,10 +57,13 @@ declare module 'claude-code' {
       task: Shaped<Task | null>
       limits: Shaped<Limits | null>
       ledger: Shaped<Ledger | null>
+      running: Shaped<Running[]>
+      prefs: Shaped<Prefs>
       now: number
       turnStartedAt: number | null
       context: number | null
       stepAvgMs: number | null
+      lastModel: string | null
       isHidden: boolean
     }
   }
