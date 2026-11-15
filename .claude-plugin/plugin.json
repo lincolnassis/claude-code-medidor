@@ -1,0 +1,10 @@
+{
+  "name": "medidor",
+  "version": "0.1.0",
+  "description": "Barra acima do prompt com o progresso da tarefa, tempo estimado, uso de 5h, semanal e mensal, projeções e alertas.",
+  "author": { "name": "lincolnassis", "url": "https://github.com/lincolnassis" },
+  "repository": "https://github.com/lincolnassis/claude-code-medidor",
+  "license": "MIT",
+  "keywords": ["usage", "tokens", "rate-limit", "progress", "statusline", "pt-br"],
+  "types": "./types/index.d.ts"
+}

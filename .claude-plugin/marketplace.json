@@ -1,0 +1,6 @@
+{
+  "name": "claude-code-medidor",
+  "description": "Medidor de uso para o Claude Code: progresso da tarefa, limites de 5h e semanal, projeções e custo mensal.",
+  "owner": { "name": "lincolnassis" },
+  "plugins": [{ "name": "medidor", "source": "./" }]
+}
