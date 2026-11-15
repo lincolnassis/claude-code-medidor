@@ -161,9 +161,11 @@ function barSvg(pct: number, colors: [string, string], w: number, h: number, gho
   if (ghost !== null && ghost > p) {
     const g = (Math.min(100, ghost) / 100) * w
     const over = ghost >= 100
+    // The projection takes its own color: the fill stays the color of now.
+    const gc = over ? GRAD.error : GRAD[tone(ghost)]
     extra =
-      `<rect width="${g.toFixed(1)}" height="${h}" rx="${r}" fill="${over ? '#ef4444' : colors[1]}" opacity="0.28"/>` +
-      `<rect x="${Math.max(0, g - 2).toFixed(1)}" width="2" height="${h}" rx="1" fill="${over ? '#ef4444' : colors[0]}" opacity="0.9"/>`
+      `<rect width="${g.toFixed(1)}" height="${h}" rx="${r}" fill="${gc[1]}" opacity="0.28"/>` +
+      `<rect x="${Math.max(0, g - 2).toFixed(1)}" width="2" height="${h}" rx="1" fill="${gc[0]}" opacity="0.9"/>`
   }
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
@@ -201,7 +203,7 @@ function Bar(props: {
   return (
     <Text>
       <Text color={colors[0]}>{'█'.repeat(filled)}</Text>
-      <Text color={colors[0]} dimColor>{'▒'.repeat(shadow)}</Text>
+      <Text color={GRAD[tone(ghost ?? 0)][0]} dimColor>{'▒'.repeat(shadow)}</Text>
       <Text dimColor>{'░'.repeat(Math.max(0, cells - filled - shadow))}</Text>
     </Text>
   )
@@ -254,7 +256,7 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
   // The weekly window, with where it lands at this pace.
   const wk = weekly(v)
   if (wk) {
-    const t = tone(Math.max(wk.pct, wk.proj ?? 0))
+    const t = tone(wk.pct)
     const projText = wk.isReset
       ? 'zerou'
       : wk.proj === null
@@ -499,7 +501,7 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
 
   const limitRow = (label: string, p: Projection | null, span: string) => {
     if (!p) return <Text dimColor>{label}: sem leitura ainda (aparece após a próxima resposta).</Text>
-    const t = tone(Math.max(p.pct, p.proj ?? 0))
+    const t = tone(p.pct)
     const lines: string[] = []
     if (p.isReset) lines.push('A janela zerou; o novo valor chega com a próxima resposta.')
     if (p.resetsAt) lines.push(`Zera ${fmtClock(p.resetsAt, v.now)} (em ${fmtIn(p.resetsAt - v.now)}).`)
