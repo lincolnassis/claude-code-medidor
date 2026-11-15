@@ -3,7 +3,7 @@
 Um mod para o [Claude Code](https://claude.com/claude-code) que coloca, logo acima do campo do prompt, uma linha com tudo o que importa para não estourar o plano:
 
 ```
-◆ Tarefa 2/4 ▰▰▱▱ 50% · ~4 min restantes · total ~9 min │ Semana ▰▰▱ 40% → 81% no fim │ 5h ▰▱▱ 23% ↻ 18:00 │ Mês US$ 12 → US$ 26 │ Contexto 34%
+◆ Tarefa 2/4 ▰▰▱▱ 50% · ~4 min restantes · total ~9 min │ Semana ▰▰▱ 40% → 81% no fim │ 5h ▰▱▱ 23% ↻ 18:00 │ Mês 1,6 semanas → 3,4 semanas de limite │ Contexto 34%
 ```
 
 Feito para quem usa o plano Pro (ou Max) e precisa acompanhar de perto o limite semanal e a janela de 5 horas.
@@ -15,7 +15,7 @@ Feito para quem usa o plano Pro (ou Max) e precisa acompanhar de perto o limite 
 | **Tarefa** | Progresso da lista de etapas que o Claude monta enquanto trabalha, com tempo restante e tempo total estimado. Passe o mouse na barra para ver a etapa atual. |
 | **Semana** | % usado da janela semanal do plano. A parte "fantasma" da barra é a **projeção**: onde você chega quando a semana zerar, no ritmo atual. Se for estourar antes, mostra o dia e a hora. |
 | **5h** | % usado da janela de 5 horas e o horário em que ela zera. |
-| **Mês** | Custo equivalente do mês (quanto custaria pela API) e a projeção até o fim do mês. |
+| **Mês** | Quanto do limite você usou no mês, em "semanas de limite" (1,6 semanas = 160% de um limite semanal), e a projeção até o fim do mês. |
 | **Contexto** | Quanto da janela de contexto desta conversa já está ocupado. |
 
 As cores mudam sozinhas: verde até 60%, amarelo até 85%, vermelho acima disso.
@@ -36,17 +36,17 @@ Se você manda um pedido simples (curto, sem código) enquanto está no Opus e a
 Cada computador grava em `OneDrive/ClaudeMedidor/<nome-do-computador>.json` só números: tokens por dia e por modelo. Não vão projetos, caminhos nem textos. O mês passa a somar todos os computadores, e no painel cada um aparece como "Outro computador (NOME)". Para usar outra pasta sincronizada, defina a variável de ambiente `CLAUDE_MEDIDOR_SYNC_DIR`.
 
 ### Resumo semanal
-Na primeira conversa de cada semana aparece uma nota com a semana anterior: custo equivalente, respostas, divisão por modelo, o dia mais pesado e o pico do limite semanal.
+Na primeira conversa de cada semana aparece uma nota com a semana anterior: respostas, tokens, quanto do limite semanal foi usado, divisão por modelo e o dia mais pesado.
 
 ### Painel `/gastos`
 Digite `/gastos` (ou clique em **Detalhes** na barra) para abrir um painel com:
 
 - os limites, quando cada um zera e quantos % por dia você ainda pode usar;
 - a tarefa atual, etapa por etapa;
-- custo e tokens de hoje, da semana e do mês, com a projeção do mês;
+- quanto do limite semanal você usou hoje, na semana e no mês, com tokens e a projeção do mês;
 - gráfico dos últimos 30 dias;
-- gasto por modelo (Opus, Sonnet, Haiku...) e por projeto;
-- quanto você economizaria usando o Sonnet nas tarefas feitas no Opus;
+- quanto do limite cada modelo (Opus, Sonnet, Haiku...) e cada projeto usaram;
+- quanto do limite teria sobrado usando o Sonnet nas tarefas feitas no Opus;
 - o resumo da semana passada;
 - opções para ligar e desligar o som, o aviso de economia e a sincronização.
 
@@ -58,7 +58,8 @@ O mod não chama nenhum modelo. Ele só lê dados que já estão no seu computad
 - **Histórico:** os registros locais das conversas em `~/.claude/projects`, que incluem os tokens e o modelo de cada resposta. Assim o mês soma **todos** os chats deste computador: app desktop, VS Code e terminal.
 - **Tarefa:** as chamadas que o Claude faz para atualizar a própria lista de etapas.
 
-O valor em US$ é o preço de tabela da API para aqueles tokens. No plano Pro você não paga por token: o número serve para comparar o peso de cada modelo.
+### Como o "% do limite" é estimado
+O % da semana e o da janela de 5 horas são os oficiais. Os outros (hoje, mês, por modelo, por projeto) são estimados a partir da sua própria semana. Cada resposta recebe um peso conforme os tokens e o modelo: o Opus pesa cerca de 2× o Sonnet, e o peso segue a proporção entre os preços de tabela de cada modelo. Depois o mod compara a soma dos pesos da semana com o quanto a barra semanal oficial subiu. Esse "% por peso" vale para qualquer período. Nada disso é cobrado: o plano continua o mesmo.
 
 ## Instalação
 
@@ -117,7 +118,7 @@ claude plugin test .
 
 ## English summary
 
-**Medidor** is a Claude Code mod that adds a one-line band above the prompt with the current task's progress and estimated time left, the plan's 5-hour and weekly usage with a projection to the reset, the month's API-equivalent cost, and the context fill. It shows the tools and subagents running now, chimes and notifies when a long task ends, suggests Sonnet for simple prompts when the week is tight, sums several computers through a numbers-only OneDrive sync, posts a weekly summary, raises alerts before a limit runs out and opens a detailed report with `/gastos` (30-day chart, usage by model and project, Sonnet savings tip). It reads only local data and never calls a model, so it uses no tokens. Install with `/plugin install medidor --marketplace lincolnassis/claude-code-medidor`.
+**Medidor** is a Claude Code mod that adds a one-line band above the prompt with the current task's progress and estimated time left, the plan's 5-hour and weekly usage with a projection to the reset, the month's usage in "weeks of limit" (learned by comparing local token usage with the official weekly percent), and the context fill. It shows the tools and subagents running now, chimes and notifies when a long task ends, suggests Sonnet for simple prompts when the week is tight, sums several computers through a numbers-only OneDrive sync, posts a weekly summary, raises alerts before a limit runs out and opens a detailed report with `/gastos` (30-day chart, usage by model and project, Sonnet savings tip). It reads only local data and never calls a model, so it uses no tokens. Install with `/plugin install medidor --marketplace lincolnassis/claude-code-medidor`.
 
 ## Licença
 

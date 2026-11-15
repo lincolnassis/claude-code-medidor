@@ -35,10 +35,11 @@ const turnA = atom({ plugin: 'medidor', key: 'turnStartedAt' } as const, null as
 const ctxA = atom({ plugin: 'medidor', key: 'context' } as const, null as number | null)
 const avgA = atom({ plugin: 'medidor', key: 'stepAvgMs' } as const, null as number | null)
 const modelA = atom({ plugin: 'medidor', key: 'lastModel' } as const, null as string | null)
+const ratioA = atom({ plugin: 'medidor', key: 'ratio' } as const, null as number | null)
 const hiddenA = atom({ plugin: 'medidor', key: 'isHidden' } as const, false)
 
 async function readView($: $T): Promise<View> {
-  const [task, limits, ledger, tick, context, turnStartedAt, stepAvgMs, running, prefs, clock] = await Promise.all([
+  const [task, limits, ledger, tick, context, turnStartedAt, stepAvgMs, running, prefs, ratio, clock] = await Promise.all([
     read($, taskA),
     read($, limitsA),
     read($, ledgerA),
@@ -48,9 +49,10 @@ async function readView($: $T): Promise<View> {
     read($, avgA),
     read($, runningA),
     read($, prefsA),
+    read($, ratioA),
     $.clock.now(),
   ])
-  return { task, limits, ledger, now: Math.max(tick, clock), context, turnStartedAt, stepAvgMs, running, prefs }
+  return { task, limits, ledger, now: Math.max(tick, clock), context, turnStartedAt, stepAvgMs, running, prefs, ratio }
 }
 
 function toWin(r: SessionRateLimit): Win {
@@ -118,6 +120,7 @@ const EMPTY_VIEW: View = {
   stepAvgMs: null,
   running: [],
   prefs: DEFAULT_PREFS,
+  ratio: null,
 }
 
 /** The highest weekly percent each window reached, for the Monday summary. */
@@ -175,6 +178,15 @@ async function refreshLedger($: $T) {
     const weekStart = resetsAt !== null && resetsAt > now ? resetsAt - 7 * 24 * HOUR : null
     const ledger = await scanLedger($, weekStart, prefs.sync)
     await update($, ledgerA, () => ledger)
+    // How many points of the weekly limit one unit of use costs, learned from
+    // this week: the official percent over what the ledger counted since the
+    // window opened. Kept, so a fresh window still has a figure.
+    const pct = limits?.weekly?.pct ?? 0
+    if (weekStart !== null && pct >= 2 && ledger.week.usd > 0.5) {
+      const ratio = pct / ledger.week.usd
+      await update($, ratioA, () => ratio)
+      await $.store.set('ratio', ratio)
+    }
     await mondaySummary($, now)
   } catch (err) {
     $.ui.log(`medidor: não consegui somar o histórico (${String(err)})`, { to: 'debug' })
@@ -189,7 +201,7 @@ async function mondaySummary($: $T, now: number) {
   if ((await $.store.get('summary-week')) === week) return
   const ledger = await read($, ledgerA)
   if (!ledger) return
-  const text = weeklySummary(ledger, await lastPeak($, now))
+  const text = weeklySummary(ledger, await lastPeak($, now), await read($, ratioA))
   await $.store.set('summary-week', week)
   if (!text) return
   $.ui.log(text)
@@ -289,6 +301,8 @@ export const register: Register = on => {
     if (prefs && typeof prefs === 'object') await update($, prefsA, () => ({ ...DEFAULT_PREFS, ...prefs }))
     const model = await $.store.get('last-model')
     if (typeof model === 'string') await update($, modelA, () => model)
+    const ratio = await $.store.get('ratio')
+    if (typeof ratio === 'number') await update($, ratioA, () => ratio)
     const usage = await $.session.usage()
     await applyLimits($, usage.rateLimits)
     if (usage.context.percent !== undefined) await update($, ctxA, () => usage.context.percent ?? null)

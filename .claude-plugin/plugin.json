@@ -1,6 +1,6 @@
 {
   "name": "medidor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Barra acima do prompt com o progresso da tarefa, tempo estimado, o que está rodando, uso de 5h, semanal e mensal, projeções, alertas, som ao terminar, aviso de economia, sincronização pelo OneDrive e resumo semanal.",
   "author": { "name": "lincolnassis", "url": "https://github.com/lincolnassis" },
   "repository": "https://github.com/lincolnassis/claude-code-medidor",

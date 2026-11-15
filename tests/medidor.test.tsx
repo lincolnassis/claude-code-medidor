@@ -44,6 +44,8 @@ const SEED: Record<string, unknown> = {
   },
   now: NOW,
   context: 34,
+  // 40% of the week over 12.5 units of use this week.
+  ratio: 3.2,
 }
 
 test('the band draws the task, the windows and the projection on every surface with a band', async ($, on) => {
@@ -150,6 +152,8 @@ test('the /gastos pane and the VS Code line draw on every surface', async ($, on
     expect(await ui.find({ type: 'Text', text: /Limites do plano/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Sonnet 5.5/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /quarta/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /US\$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /16% do limite semanal/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /NOTEBOOK pelo OneDrive/ })).toBeDefined()
     await ui.unmount()
   }

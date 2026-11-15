@@ -64,6 +64,7 @@ declare module 'claude-code' {
       context: number | null
       stepAvgMs: number | null
       lastModel: string | null
+      ratio: number | null
       isHidden: boolean
     }
   }

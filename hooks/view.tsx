@@ -19,6 +19,25 @@ export type View = {
   stepAvgMs: number | null
   running: Running[]
   prefs: Prefs
+  /** Points of the weekly limit per unit of the ledger's weight; null until learned. */
+  ratio: number | null
+}
+
+/** A ledger weight as percent of the weekly limit, once the ratio is known. */
+export function limitPct(v: View, weight: number): number | null {
+  return v.ratio === null ? null : weight * v.ratio
+}
+
+export function fmtPct(n: number): string {
+  if (n > 0 && n < 1) return '<1%'
+  return n < 10 ? `${comma(n.toFixed(1)).replace(/,0$/, '')}%` : `${Math.round(n)}%`
+}
+
+/** 230% of a week → "2,3 semanas"; under one week, the percent. */
+export function fmtWeeks(pct: number): string {
+  if (pct < 100) return fmtPct(pct)
+  const w = pct / 100
+  return `${comma(w.toFixed(1))} semana${w >= 1.95 ? 's' : ''}`
 }
 
 export const DEFAULT_PREFS: Prefs = { sound: true, nudge: true, sync: true }
@@ -57,12 +76,6 @@ export function fmtIn(ms: number): string {
     return h === 0 ? `${d} d` : `${d} d ${h} h`
   }
   return fmtDur(ms)
-}
-
-export function fmtUsd(n: number): string {
-  if (n >= 100) return `US$ ${Math.round(n)}`
-  if (n >= 10) return `US$ ${comma(n.toFixed(1))}`
-  return `US$ ${comma(n.toFixed(2))}`
 }
 
 export function fmtTok(n: number): string {
@@ -310,17 +323,21 @@ export function drawBand(u: UI, v: View, cols: number, isWorking: boolean, inter
     }
   }
 
-  // The month, in API-equivalent dollars.
+  // The month, as weeks' worth of the weekly limit (learned), else tokens.
   if (v.ledger) {
     const m = v.ledger
+    const used = limitPct(v, m.month.usd)
+    const proj = limitPct(v, m.monthProjUsd)
+    const main = used === null ? `${fmtTok(m.month.tokens)} tokens` : fmtWeeks(used)
+    const tail = proj === null ? '' : `→ ${fmtWeeks(proj)} de limite`
     segs.push({
       key: 'month',
-      width: 26,
+      width: 8 + main.length + tail.length,
       node: (
         <Box flexDirection="row" alignItems="center" gap="xs">
           <Text size={small} dimColor>Mês</Text>
-          <Text size={small} weight="semibold" tabular>{fmtUsd(m.month.usd)}</Text>
-          <Text size={small} dimColor tabular>→ {fmtUsd(m.monthProjUsd)}</Text>
+          <Text size={small} weight="semibold" tabular>{main}</Text>
+          {tail !== '' && <Text size={small} dimColor tabular>{tail}</Text>}
         </Box>
       ),
     })
@@ -387,7 +404,17 @@ export function spinnerSuffix(v: View): string {
 
 // ---------- the pane: /gastos ----------
 
-function chartSvg(days: Array<{ date: string; usd: number }>, w: number, h: number): string {
+function pctOr(v: View, weight: number): string {
+  const p = limitPct(v, weight)
+  return p === null ? '—' : fmtPct(p)
+}
+
+function weeksOr(v: View, weight: number): string {
+  const p = limitPct(v, weight)
+  return p === null ? '—' : fmtWeeks(p)
+}
+
+function chartSvg(days: Array<{ date: string; usd: number }>, w: number, h: number, fmt: (weight: number) => string): string {
   const max = Math.max(0.01, ...days.map(d => d.usd))
   const gap = 3
   const bw = (w - gap * (days.length - 1)) / days.length
@@ -400,7 +427,7 @@ function chartSvg(days: Array<{ date: string; usd: number }>, w: number, h: numb
       const [, mm, dd] = d.date.split('-')
       return (
         `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" ` +
-        `fill="${isToday ? 'url(#t)' : 'url(#g)'}"><title>${dd}/${mm}: ${esc(fmtUsd(d.usd))}</title></rect>`
+        `fill="${isToday ? 'url(#t)' : 'url(#g)'}"><title>${dd}/${mm}: ${esc(fmt(d.usd))}</title></rect>`
       )
     })
     .join('')
@@ -439,19 +466,21 @@ function weekdayOf(date: string): string {
 }
 
 /** The Monday note: last week in one paragraph, or null when there was no use. */
-export function weeklySummary(L: Ledger, peakPct: number | null): string | null {
+export function weeklySummary(L: Ledger, peakPct: number | null, ratio: number | null): string | null {
   const p = L.prevWeek
   if (p.totals.requests === 0) return null
   const share = p.byModel
     .slice(0, 3)
     .map(r => `${r.model} ${Math.round((r.usd / Math.max(0.0001, p.totals.usd)) * 100)}%`)
     .join(', ')
+  const used = peakPct ?? (ratio === null ? null : p.totals.usd * ratio)
   const parts = [
-    `📊 Resumo da semana passada (${dm(p.from)} a ${dm(p.to)}): ${fmtUsd(p.totals.usd)} em custo equivalente`,
-    `${p.totals.requests} respostas, ${fmtTok(p.totals.tokens)} tokens`,
-    share ? `modelos: ${share}` : '',
-    p.topDay ? `dia mais pesado: ${weekdayOf(p.topDay.date)} (${fmtUsd(p.topDay.usd)})` : '',
-    peakPct !== null ? `pico do limite semanal: ${Math.round(peakPct)}%` : '',
+    `📊 Resumo da semana passada (${dm(p.from)} a ${dm(p.to)}): ${p.totals.requests} respostas, ${fmtTok(p.totals.tokens)} tokens`,
+    used !== null ? `${peakPct !== null ? 'limite semanal usado' : 'limite semanal usado (estimado)'}: ${fmtPct(used)}` : '',
+    share ? `divisão do uso: ${share}` : '',
+    p.topDay
+      ? `dia mais pesado: ${weekdayOf(p.topDay.date)}${ratio !== null ? ` (${fmtPct(p.topDay.usd * ratio)} do limite)` : ''}`
+      : '',
   ].filter(Boolean)
   return `${parts.join(' · ')}.`
 }
@@ -535,23 +564,29 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
         </Box>
       )}
 
-      <Text size="heading" weight="bold">Consumo (equivalente em preço de API)</Text>
+      <Text size="heading" weight="bold">Consumo</Text>
       {L ? (
         <Box flexDirection="column" gap="sm">
           <Markdown
             text={table(
-              ['', 'Custo equiv.', 'Tokens', 'Respostas'],
+              ['', 'Do limite semanal', 'Tokens', 'Respostas'],
               [
-                ['**Hoje**', fmtUsd(L.today.usd), fmtTok(L.today.tokens), String(L.today.requests)],
-                ['**Semana**', fmtUsd(L.week.usd), fmtTok(L.week.tokens), String(L.week.requests)],
-                ['**Mês**', fmtUsd(L.month.usd), fmtTok(L.month.tokens), String(L.month.requests)],
-                ['**Projeção do mês**', fmtUsd(L.monthProjUsd), '', ''],
+                ['**Hoje**', pctOr(v, L.today.usd), fmtTok(L.today.tokens), String(L.today.requests)],
+                ['**Semana**', wk && !wk.isReset ? fmtPct(wk.pct) : pctOr(v, L.week.usd), fmtTok(L.week.tokens), String(L.week.requests)],
+                ['**Mês**', weeksOr(v, L.month.usd), fmtTok(L.month.tokens), String(L.month.requests)],
+                ['**Projeção do mês**', weeksOr(v, L.monthProjUsd), '', ''],
               ],
             )}
           />
           <Text weight="semibold">Últimos 30 dias</Text>
           {Svg ? (
-            <Svg source={chartSvg(L.days, 300, 70)} alt="Custo equivalente por dia nos últimos 30 dias" width={300} height={70} isInteractive={interactive} />
+            <Svg
+              source={chartSvg(L.days, 300, 70, n => (v.ratio === null ? `${Math.round(n * 100) / 100} (peso)` : `${fmtPct(n * v.ratio)} do limite semanal`))}
+              alt="Uso por dia nos últimos 30 dias"
+              width={300}
+              height={70}
+              isInteractive={interactive}
+            />
           ) : (
             <Text color="#a78bfa">{sparkline(L.days)}</Text>
           )}
@@ -560,8 +595,8 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
               text={
                 '**Por modelo (semana)**\n\n' +
                 table(
-                  ['Modelo', 'Custo equiv.', 'Parte'],
-                  L.weekByModel.map(r => [r.model, fmtUsd(r.usd), `${Math.round((r.usd / Math.max(0.0001, L.week.usd)) * 100)}%`]),
+                  ['Modelo', 'Do limite semanal', 'Parte do uso'],
+                  L.weekByModel.map(r => [r.model, pctOr(v, r.usd), `${Math.round((r.usd / Math.max(0.0001, L.week.usd)) * 100)}%`]),
                 )
               }
             />
@@ -570,26 +605,30 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
             <Markdown
               text={
                 '**Por projeto (mês)**\n\n' +
-                table(['Projeto', 'Custo equiv.', 'Tokens'], L.monthByProject.map(r => [r.name, fmtUsd(r.usd), fmtTok(r.tokens)]))
+                table(['Projeto', 'Do limite semanal', 'Tokens'], L.monthByProject.map(r => [r.name, pctOr(v, r.usd), fmtTok(r.tokens)]))
               }
             />
           )}
           {L.sonnetSavingWeek > 0.05 && (
             <Text color="suggestion">
-              💡 Esta semana, se as tarefas feitas no Opus/Fable tivessem ido para o Sonnet 5.5, o peso seria ~
-              {fmtUsd(L.sonnetSavingWeek)} menor ({Math.round((L.sonnetSavingWeek / Math.max(0.0001, L.week.usd)) * 100)}% da semana).
-              Use o Sonnet para tarefas simples e guarde o Opus para as difíceis.
+              💡 Se as tarefas desta semana feitas no Opus/Fable tivessem ido para o Sonnet 5.5, teria sobrado cerca de{' '}
+              {v.ratio === null
+                ? `${Math.round((L.sonnetSavingWeek / Math.max(0.0001, L.week.usd)) * 100)}% do uso da semana`
+                : `${fmtPct(L.sonnetSavingWeek * v.ratio)} do limite semanal`}
+              . Use o Sonnet para tarefas simples e guarde o Opus para as difíceis.
             </Text>
           )}
-          {weeklySummary(L, peakPct) !== null && (
+          {weeklySummary(L, peakPct, v.ratio) !== null && (
             <Box flexDirection="column" gap="xs">
               <Text weight="semibold">Semana passada</Text>
-              <Text dimColor>{(weeklySummary(L, peakPct) ?? '').replace(/^📊 Resumo da semana passada /, '')}</Text>
+              <Text dimColor>{(weeklySummary(L, peakPct, v.ratio) ?? '').replace(/^📊 Resumo da semana passada /, '')}</Text>
             </Box>
           )}
           <Text dimColor size="footnote">
-            No plano Pro você não paga por token: o valor em US$ é quanto custaria pela API e serve para comparar o peso de cada
-            modelo. Lido dos registros deste computador ({L.files} conversas
+            {v.ratio === null
+              ? 'Os % do limite aparecem assim que a semana tiver uso suficiente para o mod aprender o seu ritmo. '
+              : 'Os % do limite (exceto o da semana, que é o oficial) são estimados: o mod compara o quanto você usou nesta semana com o quanto a barra semanal subiu, e cada modelo pesa diferente (o Opus pesa cerca de 2× o Sonnet). '}
+            Lido dos registros deste computador ({L.files} conversas
             {L.skipped > 0 ? `, ${L.skipped} grandes demais para ler` : ''})
             {L.machines.length > 0 ? ` e de ${L.machines.join(', ')} pelo OneDrive` : ''}; atualizado {fmtClock(L.at, v.now)}.
           </Text>
