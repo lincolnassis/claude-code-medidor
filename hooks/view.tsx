@@ -186,18 +186,19 @@ function Bar(props: {
   colors: [string, string]
   title: string
   ghost?: number | null
-  wide?: boolean
+  /** A wide bar's room, in cells of the site it is drawn in. */
+  wide?: number
   interactive: boolean
 }) {
-  const { u, pct, colors, title, ghost = null, wide = false, interactive } = props
+  const { u, pct, colors, title, ghost = null, wide, interactive } = props
   const { Text, Svg } = u
   if (Svg) {
     // Not `h`: that name is the JSX factory.
-    const w = wide ? 220 : 64
+    const w = wide ? Math.max(120, Math.min(320, Math.round(wide * 7.5 - 24))) : 64
     const tall = wide ? 10 : 7
     return <Svg source={barSvg(pct, colors, w, tall, ghost, title)} alt={title} width={w} height={tall} isInteractive={interactive} />
   }
-  const cells = wide ? 24 : 10
+  const cells = wide ? Math.max(10, Math.min(30, wide - 6)) : 10
   const filled = Math.round((Math.min(100, pct) / 100) * cells)
   const shadow = ghost !== null ? Math.max(0, Math.round((Math.min(100, ghost) / 100) * cells) - filled) : 0
   return (
@@ -497,8 +498,17 @@ export type PaneActions = {
   togglePref: (key: keyof Prefs) => void
 }
 
-export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions, isHidden: boolean, peakPct: number | null) {
+export function drawPane(
+  u: UI,
+  v: View,
+  interactive: boolean,
+  act: PaneActions,
+  isHidden: boolean,
+  peakPct: number | null,
+  cols: number,
+) {
   const { Box, Text, Button, Markdown, Svg } = u
+  const chartW = Math.max(160, Math.min(300, Math.round(cols * 7.5 - 24)))
   const wk = weekly(v)
   const fh = fiveHour(v)
   const L = v.ledger
@@ -521,11 +531,11 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
     }
     return (
       <Box flexDirection="column" gap="xs">
-        <Box flexDirection="row" alignItems="center" gap="sm">
+        <Box flexDirection="row" alignItems="center" justifyContent="space-between">
           <Text weight="semibold">{label}</Text>
-          <Bar u={u} pct={p.pct} ghost={p.proj} colors={GRAD[t]} title={`${label}: ${p.pct}%`} wide interactive={interactive} />
           <Text weight="bold" color={tone(p.pct)} tabular>{Math.round(p.pct)}%</Text>
         </Box>
+        <Bar u={u} pct={p.pct} ghost={p.proj} colors={GRAD[t]} title={`${label}: ${p.pct}%`} wide={cols} interactive={interactive} />
         <Text dimColor>{lines.join(' ')}</Text>
       </Box>
     )
@@ -555,7 +565,7 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
         <Box flexDirection="column" gap="xs">
           <Text size="heading" weight="bold">Tarefa atual</Text>
           <Box flexDirection="row" alignItems="center" gap="sm">
-            <Bar u={u} pct={est.pct} colors={GRAD.task} title="Tarefa" wide interactive={interactive} />
+            <Bar u={u} pct={est.pct} colors={GRAD.task} title="Tarefa" wide={cols - 6} interactive={interactive} />
             <Text weight="bold" tabular>{est.pct}%</Text>
             <Text dimColor>
               {est.done} de {est.total} etapas · {fmtDur(est.elapsedMs)}
@@ -575,21 +585,21 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
         <Box flexDirection="column" gap="sm">
           <Markdown
             text={table(
-              ['', 'Do limite semanal', 'Tokens', 'Respostas'],
+              ['', '% do limite', 'Tokens'],
               [
-                ['**Hoje**', pctOr(v, L.today.usd), fmtTok(L.today.tokens), String(L.today.requests)],
-                ['**Semana**', wk && !wk.isReset ? fmtPct(wk.pct) : pctOr(v, L.week.usd), fmtTok(L.week.tokens), String(L.week.requests)],
-                ['**Mês**', weeksOr(v, L.month.usd), fmtTok(L.month.tokens), String(L.month.requests)],
-                ['**Projeção do mês**', weeksOr(v, L.monthProjUsd), '', ''],
+                ['**Hoje**', pctOr(v, L.today.usd), fmtTok(L.today.tokens)],
+                ['**Semana**', wk && !wk.isReset ? fmtPct(wk.pct) : pctOr(v, L.week.usd), fmtTok(L.week.tokens)],
+                ['**Mês**', weeksOr(v, L.month.usd), fmtTok(L.month.tokens)],
+                ['**Fim do mês**', weeksOr(v, L.monthProjUsd), '(projeção)'],
               ],
             )}
           />
           <Text weight="semibold">Últimos 30 dias</Text>
           {Svg ? (
             <Svg
-              source={chartSvg(L.days, 300, 70, n => (v.ratio === null ? `${Math.round(n * 100) / 100} (peso)` : `${fmtPct(n * v.ratio)} do limite semanal`))}
+              source={chartSvg(L.days, chartW, 70, n => (v.ratio === null ? `${Math.round(n * 100) / 100} (peso)` : `${fmtPct(n * v.ratio)} do limite semanal`))}
               alt="Uso por dia nos últimos 30 dias"
-              width={300}
+              width={chartW}
               height={70}
               isInteractive={interactive}
             />
@@ -601,7 +611,7 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
               text={
                 '**Por modelo (semana)**\n\n' +
                 table(
-                  ['Modelo', 'Do limite semanal', 'Parte do uso'],
+                  ['Modelo', '% do limite', 'Parte'],
                   L.weekByModel.map(r => [r.model, pctOr(v, r.usd), `${Math.round((r.usd / Math.max(0.0001, L.week.usd)) * 100)}%`]),
                 )
               }
@@ -611,7 +621,7 @@ export function drawPane(u: UI, v: View, interactive: boolean, act: PaneActions,
             <Markdown
               text={
                 '**Por projeto (mês)**\n\n' +
-                table(['Projeto', 'Do limite semanal', 'Tokens'], L.monthByProject.map(r => [r.name, pctOr(v, r.usd), fmtTok(r.tokens)]))
+                table(['Projeto', '% do limite', 'Tokens'], L.monthByProject.map(r => [r.name, pctOr(v, r.usd), fmtTok(r.tokens)]))
               }
             />
           )}

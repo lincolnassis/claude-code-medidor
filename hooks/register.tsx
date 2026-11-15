@@ -452,6 +452,7 @@ export const register: Register = on => {
       },
       isHidden,
       peak,
+      e.props.bodyColumns,
     )
   })
 }
